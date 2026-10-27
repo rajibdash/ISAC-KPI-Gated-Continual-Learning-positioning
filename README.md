@@ -1,5 +1,6 @@
-# ISAC-KPI-Gated-Continual-Learning-positioning
+# ISAC KPI/Observation Gated Continual Learning about positioning
 
+## Purpose
 * Based on understanding, in a Continual Learning (CL) framework for drone or object positioning using Integrated Sensing and Communications (ISAC), the new learning framework system must continuously update its positioning models using real time radio/channel condition observations and Key Performance Indicators (KPIs) without forgetting previously learned environments (e.g., changes in weather/climate, structural blockages, or new multi-path reflections).
 
 * The core design detail that bridges the gap between raw RF sensing and deep learning model updates is the KPI-Gated Experience Replay Buffer with Dynamic Task Allocation.
