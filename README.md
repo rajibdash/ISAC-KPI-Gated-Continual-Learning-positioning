@@ -80,7 +80,7 @@
         └─► Sensing SNR Drops     └─► Sensing SNR Stays High (New reflections)
         │                         │
    [KPI-GATE CLOSED]           [KPI-GATE OPENS: Trigger CL Model]
-  (Protect the model)           (Adapt to new environment)
+  (Protect the CL model)           (Adapt to new environment)
 
 ```
 
