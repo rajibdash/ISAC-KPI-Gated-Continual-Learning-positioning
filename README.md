@@ -1,5 +1,11 @@
 # ISAC KPI/Observation Gated Continual Learning about positioning (Outdoor)
 
+> The conceptual diagrams and draft below are preserved for motivation.
+> The tested Python implementation is described in [Implementation](#implementation)
+> and [Quickstart](#quickstart). It supersedes the draft's RSRP-only trigger:
+> communication degradation alone does **not** authorize training, and high sensing
+> SNR alone does **not** establish label reliability.
+
 ## Purpose
 * Based on understanding, in a Continual Learning (CL) framework for drone or object positioning using Integrated Sensing and Communications (ISAC), the new learning framework system must continuously update its positioning models using real time radio/channel condition observations and Key Performance Indicators (KPIs) without forgetting previously learned environments (e.g., changes in weather/climate, structural blockages, or new multi-path reflections).
 
@@ -209,3 +215,159 @@ if __name__ == "__main__":
   * __ISAC KPI Monitoring__: Maintain a sliding window of the moving average of throughput and BLER.
   * __Buffer Injection__: If BLER surges > 5% while sensing data indicates stationary or predictable velocity, flag the current RF fingerprint as a "New Geometry Blockage" and store it.
   * __Edge Training__: During drone docking/charging cycles, run the EWC loss function using the stored buffer to update the local positioning model without destroying global performance.
+
+## Implementation
+
+The `src/isac_cl` package implements a replay-based baseline, not EWC or dynamic
+task allocation. Only NumPy and PyTorch are runtime dependencies; Sionna/MATLAB
+can supply observations without being imported by the controller.
+
+| Module | Architecture responsibility |
+|---|---|
+| `config.py` | Validated immutable policy thresholds and training/buffer settings |
+| `models.py` | `Observation`, `Evaluation`, shape/finite-value helpers, and `PositionNet` MLP |
+| `evaluation.py` | Frozen calibration normalization, eligible rolling window, mean position error, communication flags, and drift |
+| `gating.py` | Consecutive-window evidence, minimum pending data, and attempt cooldown |
+| `continual.py` | Uniform reservoir replay, pending FIFO, isolated candidate training, and validation-controlled deployment |
+| `pipeline.py` | `process_observation`: inference → evaluation → admission → gating → optional adaptation |
+
+Features are finite real vectors `[D]` (split complex CSI into real/imaginary
+components upstream); labels/predictions are XYZ in meters. Training/validation
+arrays have shapes `[N,D]` and `[N,3]`. Invalid shapes or nonfinite inputs raise
+`ValueError`. Reference statistics require at least two calibration samples and
+never update online. Drift is the RMS of the rolling mean of standardized
+features; position error is mean Euclidean distance over eligible observations.
+Candidate selection instead uses **3D positioning RMSE**, not coordinate RMSE.
+
+An eligible label requires coordinates, sufficient sensing SNR, and independently
+calibrated label confidence. Unreliable observations clear the evaluation window
+and gate streak, but do not discard previously admitted pending data.
+Communication degradation uses linear-power-averaged RSRP or the mean of available
+BLER measurements (missing BLER is ignored). During unreliable-label outages,
+evaluation returns no adaptation evidence, including `comm_bad=False`.
+
+The gate requires persistent error **or** drift; communication alone is monitor-only.
+Persistence counts consecutive eligible rolling windows, which can overlap.
+Use strictly increasing nonnegative integer observation steps; cooldown counts
+steps, not seconds, and starts only when an adaptation is attempted, including
+rejections. Missing validation postpones training without starting cooldown.
+
+The candidate is a deep copy trained with equally sized fresh and replay batches,
+sampled with replacement. It is deployed only if recent RMSE strictly improves
+by more than `min_recent_improvement_m` and old RMSE increases by no more than
+`max_old_regression_m`. Nonfinite losses, gradients, model state, or validation
+metrics reject it. Failed numeric attempts report `numerical_failure` (unavailable
+after-metrics are infinity). Invalid validation arrays raise before training.
+Completed attempts, accepted or rejected, insert pending observations into replay
+and clear pending; insufficient data leaves both buffers unchanged. Pending
+overflow evicts the oldest samples; replay uses bounded uniform reservoir sampling.
+
+Gate reason codes are `unreliable_observation_or_label`, `warming_up`, `stable`,
+`communication_only_degradation`, `waiting_for_persistence`, `cooldown`,
+`collecting_labeled_samples`, `position_error`, and `feature_drift`. The pipeline
+also reports `waiting_for_independent_validation`; adaptation outcomes separately
+report `insufficient_data`, `accepted`, `validation_rejected`, or `numerical_failure`.
+The returned prediction is always the pre-adaptation deployed-model prediction.
+
+## Quickstart
+
+Python 3.10+ is required. From the repository root, install CPU PyTorch first to
+avoid downloading accelerator libraries, then install the package:
+
+```bash
+python -m pip install "torch>=2.14.1" --index-url https://download.pytorch.org/whl/cpu
+python -m pip install -e ".[test]"
+```
+
+This self-contained synthetic example initializes an offline model and processes
+a shifted stream. It is an API demonstration, not an ISAC performance benchmark.
+
+```python
+import numpy as np
+import torch
+from isac_cl import (
+    Config, Observation, PositionNet, EvaluationEngine, KPIGate,
+    ContinualLearningEngine, process_observation,
+)
+
+rng = np.random.default_rng(42)
+torch.manual_seed(42)
+torch.set_num_threads(1)
+
+def dataset(n, shift=0.0):
+    x = rng.normal(shift, 1, (n, 2)).astype(np.float32)
+    y = np.column_stack((x, np.zeros(n))).astype(np.float32)
+    return x, y
+
+train_x, train_y = dataset(64)
+old_validation = dataset(32)
+recent_validation = dataset(32, shift=2)
+config = Config(window=4, persistence=2, min_new_samples=4, train_steps=40)
+evaluator = EvaluationEngine(train_x, config)
+model = PositionNet(feature_dim=2)  # CPU by default
+
+# Offline initialization uses only training data and the frozen normalization.
+optimizer = torch.optim.Adam(model.parameters(), lr=config.learning_rate)
+for _ in range(100):
+    optimizer.zero_grad(set_to_none=True)
+    loss = torch.nn.functional.mse_loss(
+        model(torch.from_numpy(evaluator.normalize(train_x))),
+        torch.from_numpy(train_y),
+    )
+    loss.backward()
+    optimizer.step()
+
+learner = ContinualLearningEngine(
+    model, evaluator, config, train_x, train_y, seed=42,
+)
+gate = KPIGate(config)
+online_x, online_y = dataset(12, shift=2)
+for step, (x, xyz) in enumerate(zip(online_x, online_y)):
+    observation = Observation(
+        features=x, rsrp_dbm=-100, sensing_snr_db=20,
+        label_confidence=1.0, xyz_m=xyz, bler=0.2,
+    )  # Synthetic oracle labels; confidence is not inferred from SNR.
+    result = process_observation(
+        step, observation, evaluator, gate, learner,
+        old_validation=old_validation, recent_validation=recent_validation,
+    )
+    print(step, result["reason"], result["adaptation"])
+```
+
+For Sionna or MATLAB integration, replace `dataset` and the observation loop with
+extracted communication fingerprints, waveform-measured RSRP/BLER, independently
+modeled sensing SNR, and explicitly identified oracle or calibrated position labels.
+Do not treat uncalibrated channel gain as RSRP or radar sensing SNR.
+
+### Assumptions and limitations
+
+- Threshold defaults are illustrative research policies, not ISAC standards.
+- Validation must be disjoint from initial training, pending, and replay samples.
+  Split by trajectory/time/environment to avoid near-duplicate leakage; the
+  package cannot infer dataset provenance. In online experiments, do not expose
+  future validation samples before they become available. Keep a separate final
+  test set untouched by candidate selection.
+- No supervised adaptation during label outages. High SNR does not replace an
+  independent label source.
+- Mean-shift drift detection misses covariance/multimodal changes and can
+  repeatedly flag a legitimate new environment after cooldown.
+- Full waveform KPI extraction, radar sensing, scene/trajectory simulation,
+  task allocation, EWC, checkpointing, asynchronous training, and production
+  scheduling are out of scope. Engine instances are synchronous, not thread-safe.
+- Seed NumPy/PyTorch for reproducibility. Replay/batch sampling uses local seeded
+  RNGs; stochastic custom models also depend on PyTorch's RNG and device behavior.
+
+## Testing
+
+After installing the test extra, run from the repository root:
+
+```bash
+python -m pytest -q
+# Focused engine tests:
+python -m pytest -q tests/test_evaluation.py tests/test_gating.py
+```
+
+Tests run on CPU with fixed seeds and controlled synthetic fixtures. They cover
+readiness, label outages, RSRP/BLER, drift, reason codes, persistence/cooldown,
+sample admission, validation acceptance/rejection, candidate isolation, numerical
+failures, buffer bounds, reservoir determinism, invalid inputs, and orchestration.

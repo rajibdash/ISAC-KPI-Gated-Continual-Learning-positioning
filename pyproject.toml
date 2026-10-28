@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "isac-cl"
+version = "0.1.0"
+description = "KPI-gated replay-based continual learning for ISAC positioning"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26.4", "torch>=2.14.1"]
+
+[project.optional-dependencies]
+test = ["pytest>=9.2.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
