@@ -44,10 +44,10 @@
 
 ```
 
-[ Outdoor ISAC Environment (Sionna) ]
+    [Outdoor ISAC Environment (Sionna)]
           │                      │
           ▼                      ▼
-    Sensing Metrics        Comm Metrics (CSI/RSRP)
+   Sensing Metrics]        [Comm Metrics (CSI/RSRP)]
           │                      │
           └───────────► [ KPI-Gate ] ◄───────────┘
                              │
@@ -61,11 +61,29 @@
                     ▼
           [Continual Learning Model] ──► Predicted Coordinates (X, Y, Z)
 
-
 ```
 
 **Draft code**
   * By introducing a KPI/Observation Gate, we update the positioning network only when sensing/communication performance drops or when novel, high-confidence observations are detected.
+  * SINR drop was omitted from the gating metrics to prevent the system from getting trapped in an infinite training loop caused by non-line-of-sight (NLOS) blockages.
+  * Instead of SINR, the architecture would rely on the decoupling of RSRP and Sensing SNR:
+    
+```
+        [Environmental Event]
+                 │
+        ┌────────┴──────--------──┐
+        ▼                         ▼
+ [Temporary Blockage]     [True Spatial Layout Change]
+ (e.g., Passing Bus)      (e.g., Turning into a new street)
+        │                         │
+        ├─► RSRP Drops            ├─► RSRP Drops Permanently
+        └─► Sensing SNR Drops     └─► Sensing SNR Stays High (New reflections)
+        │                         │
+   [KPI-GATE CLOSED]           [KPI-GATE OPENS: Trigger CL Model]
+  (Protect the model)           (Adapt to new environment)
+
+```
+
 
 ```python
 
