@@ -66,10 +66,11 @@
 **Draft code**
   * By introducing a KPI/Observation Gate, we update the positioning network only when sensing/communication performance drops or when novel, high-confidence observations are detected.
   * SINR drop was omitted from the gating metrics to prevent the system from getting trapped in an infinite training loop caused by non-line-of-sight (NLOS) blockages.
-  * Instead of SINR, the architecture would rely on the decoupling of RSRP and Sensing SNR:
-    
+  * Instead of SINR, the architecture would rely on the decoupling of RSRP and Sensing SNR(Radar Echo Quality):
+
 ```
-        [Environmental Event]
+
+         [Environmental Event]
                  │
         ┌────────┴──────--------──┐
         ▼                         ▼
