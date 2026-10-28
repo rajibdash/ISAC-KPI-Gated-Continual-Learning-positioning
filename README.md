@@ -35,16 +35,36 @@
 ```
 
 **The KPI & Observation Evaluation Engine**
- * Rationale:
- * Function:
 
-**The Gating Mechanism**
- * Rationale:
- * Function:
+* Rationale:
+  * Raw ISAC measurements are noisy and can degrade for reasons that do not require model retraining (e.g., temporary blockage, fading, or link fluctuations). The evaluation engine converts these raw observations into reliable adaptation evidence by combining communication KPIs (e.g., RSRP/BLER), sensing quality indicators, label reliability, and positioning error/drift trends over a rolling window.
+* Function:
+  * Normalizes incoming feature vectors using frozen calibration statistics from initial training data.
+Maintains an eligible rolling window of observations (only when sensing quality and label confidence satisfy minimum requirements).
+Computes adaptation signals: mean positioning error, feature-drift score, and communication degradation flags.
+Rejects low-trust observations from adaptation evidence and outputs structured evaluation signals for the gate (ready, label_ok, comm_bad, drift_score, position_error_m).
+
+**The KPI Gating Mechanism**
+
+* Rationale:
+  * Continuous retraining is expensive and risky: it can overfit transient events and increase catastrophic forgetting. A gate is required to ensure that updates happen only when there is persistent, validated evidence of environment/task change—not just short-term communication drops.
+* Function:
+  * Applies policy rules to evaluation outputs and decides whether adaptation is allowed.
+Requires persistence across consecutive windows (error/drift must remain elevated).
+Enforces cooldown between adaptation attempts to prevent update loops.
+Requires a minimum number of pending reliable labeled samples before training.
+Emits interpretable reason codes (stable, warming_up, communication_only_degradation, waiting_for_persistence, cooldown, collecting_labeled_samples, position_error, feature_drift).
 
 **Continual Learning (CL) Engine**
- * Rationale:
- * Function:
+
+* Rationale:
+  * The system must adapt to genuine distribution shifts while preserving prior positioning performance. Updating the deployed model directly is unsafe; adaptation should first be tested on a candidate and accepted only when it improves recent conditions without unacceptable regression on historical data.
+* Function:
+  * Stores reliable online samples in a pending buffer and historical samples in a bounded replay memory (reservoir sampling).
+Trains an isolated candidate model on a mix of pending + replay data (deployed model remains unchanged during training).
+Validates candidate performance on both recent and historical validation sets using 3D RMSE.
+Deploys candidate only if recent performance improves beyond threshold and historical regression stays within tolerance; otherwise rejects and keeps current model.
+Provides adaptation outcomes (accepted, validation_rejected, insufficient_data, numerical_failure) and clears/commits buffers according to policy.
 
 **Simulation testbed Sionna layout:**
 
